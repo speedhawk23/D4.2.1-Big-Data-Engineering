@@ -1,13 +1,14 @@
-
 import os, sys, ctypes, sqlite3, hashlib
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple, List
+
 # Limits internal library threads to 1 per process to avoid CPU overload and improve stability in parallel image processing.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("CV_NUM_THREADS", "1")
+
 # central configuration for image scanning and database settings
 @dataclass
 class Config:
@@ -40,6 +41,7 @@ def open_db(db_path: str, bulk: bool=False) -> sqlite3.Connection:
     if bulk and cfg.FAST_DB_BULK:  # lock DB exclusively during bulk insert for maximum write speed
         conn.execute("PRAGMA locking_mode=EXCLUSIVE")
     return conn 
+
 # create images table and indexes if they don't exist
 def create_schema(conn: sqlite3.Connection) -> None:
     with conn:  #uses the context manager of sqlite3.Connection
@@ -58,11 +60,13 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_path ON images(path);   # create indexes on path and directory for faster lookups
         CREATE INDEX IF NOT EXISTS idx_dir  ON images(directory);
         """)
+
 # generate a unique, stable 63-bit positive ID from the image path using blake2b hashing
 def generate_image_id(path: str) -> int:
     h = hashlib.blake2b(path.encode('utf-8'), digest_size=8).digest()
     x = int.from_bytes(h, 'big') & ((1 << 63) - 1)
     return x or 1
+
 # determine if a file or folder should be treated as hidden or system-protected
 # uses Windows API attributes on Windows, and dot-prefix naming on Unix/Mac
 def _is_hidden_or_system(path: str) -> bool:
@@ -75,6 +79,7 @@ def _is_hidden_or_system(path: str) -> bool:
         except Exception:
             return False
     return base.startswith('.')
+
 # skip path if it matches skip list or is hidden/system
 def _should_skip_path(full_path: str) -> bool:
     low = os.path.normcase(full_path).lower()  # Normalizes the path (on Windows, converts to lowercase for case-insensitive comparison).
@@ -90,6 +95,7 @@ def _file_stat(p: str) -> Tuple[Optional[int], Optional[float]]:
         return st.st_size, st.st_mtime
     except Exception:
         return None, None
+    
 # recursively yield absolute paths of allowed image files, skipping unwanted folders/files
 def iter_image_files(folder: str, extensions=None) -> Iterable[str]:
     exts = set([e.lower() for e in (extensions or cfg.SCAN_EXTS)])
@@ -102,6 +108,7 @@ def iter_image_files(folder: str, extensions=None) -> Iterable[str]:
                 full = os.path.abspath(os.path.join(root, f))
                 if not _should_skip_path(full):
                     yield full
+
 # scan image files, collect their metadata, and insert or update them in the DB in configurable batch sizes
 # uses file size and modification time to detect changes, returns total number of processed images
 def index_images_streaming(conn: sqlite3.Connection, folder: str, limit: Optional[int], extensions: set) -> int:
@@ -139,6 +146,7 @@ def _bulk_upsert(cur: sqlite3.Cursor, rows: List[Tuple[int,str,str,str,Optional[
         "OR COALESCE(mtime,-1)  != COALESCE(?, -1))",
         [(fn, dr, sz, mt, p, sz, mt) for (_, p, fn, dr, sz, mt) in rows]
     )
+
 # delete all DB entries whose path matches known recycle bin or system folders
 def purge_recyclebin_entries(conn: sqlite3.Connection) -> int:
     patterns = ['%$recycle.bin%', '%recycler%', '%recycled%', '%system volume information%']
@@ -146,6 +154,7 @@ def purge_recyclebin_entries(conn: sqlite3.Connection) -> int:
     with conn:
         cur = conn.execute(f"DELETE FROM images WHERE {where}", [p.lower() for p in patterns])
         return cur.rowcount
+    
 # CLI entry point: parse arguments, run indexing or purge, then close the DB
 if __name__ == "__main__":
     import argparse
