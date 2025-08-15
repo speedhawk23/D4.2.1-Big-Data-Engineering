@@ -5,7 +5,6 @@ import cv2
 from tqdm import tqdm
 from image_indexer import cfg, open_db, create_schema
 
-
 try:
     import faiss
     FAISS_AVAILABLE = True
@@ -72,12 +71,15 @@ def write_features(conn: sqlite3.Connection, batch: List[Tuple[int, bytes]]) -> 
         )
 
 # Process images in pages and in parallel, show progress, and save results to the database in batches while tracking successes and failures
-def process_hsv(conn: sqlite3.Connection) -> None:
+def process_hsv(conn: sqlite3.Connection, limit: Optional[int]=None) -> None:
     page = cfg.BATCH_SIZE
     success = failed = 0
     last_id = 0
+    processed_total = 0
     with mp.Pool(cfg.NUM_WORKERS, initializer=_worker_init) as pool:
         while True:
+            if limit is not None and processed_total >= limit:
+                break
             rows = conn.execute(
                 "SELECT image_id, path FROM images "
                 "WHERE hsv_vector IS NULL AND image_id > ? "
@@ -86,6 +88,11 @@ def process_hsv(conn: sqlite3.Connection) -> None:
             ).fetchall()
             if not rows: break
             last_id = rows[-1][0]
+            if limit is not None:
+                remaining = max(0, limit - processed_total)
+                if remaining == 0:
+                    break
+                rows = rows[:remaining]
             batch: List[Tuple[int, bytes]] = []
             for res in tqdm(pool.imap_unordered(process_feature_worker, rows, chunksize=400),
                             total=len(rows), desc=f"HSV (last_id={last_id})"):
@@ -96,6 +103,7 @@ def process_hsv(conn: sqlite3.Connection) -> None:
                 else:
                     failed += 1
             if batch: write_features(conn, batch)
+            processed_total += len(rows)
     print(f"HSV-Fertig: {success} ok, {failed} Fehler")
 
 # Convert HSV vector from database BLOB to contiguous NumPy float32 array.
@@ -116,7 +124,7 @@ class HSVIndex:
         sims = self.mat @ q
         idx = np.argpartition(-sims, k-1)[:k]; idx = idx[np.argsort(-sims[idx])]
         return [(self.paths[int(i)], float(sims[int(i)])) for i in idx]
-    
+
 # Add helper to get count of indexed images and maximum image_id from the database.
 def _index_stats(conn: sqlite3.Connection) -> Tuple[int,int]:
     c = conn.execute("SELECT COUNT(*), COALESCE(MAX(image_id),0) FROM images WHERE hsv_vector IS NOT NULL").fetchone()
@@ -179,8 +187,7 @@ def load_hsv_index(db_path: str, persist: bool=False) -> HSVIndex:
     idx_loaded = try_load_faiss_index(db_path, count, maxid, dim) if USE_FAISS else None
     if idx_loaded is not None:
         return HSVIndex(paths, index=idx_loaded, use_faiss=True)
-    
-    
+
     if USE_FAISS and len(paths) >= 1:
         if FAISS_USE_IVF and M.shape[0] >= 10_000:
             quant = faiss.IndexFlatIP(dim)
@@ -195,15 +202,14 @@ def load_hsv_index(db_path: str, persist: bool=False) -> HSVIndex:
         if persist:
             save_faiss_index(db_path, idx, len(paths), maxid, dim)
         return HSVIndex(paths, index=idx, use_faiss=True)
-    
 
     return HSVIndex(paths, mat=M, use_faiss=False)
+
 def find_similar(query_path: str, db_path: str, k: int=5, persist_index: bool=False):
     q = _compute_query_vec(query_path)
     if q is None: return []
     idx = load_hsv_index(db_path, persist=persist_index)
     return idx.search(q, k=k)
-
 
 if __name__ == "__main__":
     import argparse
@@ -214,13 +220,14 @@ if __name__ == "__main__":
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--faiss_ivf", action="store_true")
     parser.add_argument("--persist_index", action="store_true", help="Save FAISS index to disk.")
+    parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
     if args.faiss_ivf:
         FAISS_USE_IVF = True
     if args.stage == "hsv":
         conn = open_db(args.db, bulk=True)
         create_schema(conn)
-        process_hsv(conn)
+        process_hsv(conn, limit=args.limit)
         conn.close()
     elif args.stage == "search":
         if not args.query:
