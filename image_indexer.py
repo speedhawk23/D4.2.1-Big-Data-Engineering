@@ -44,22 +44,23 @@ def open_db(db_path: str, bulk: bool=False) -> sqlite3.Connection:
 
 # create images table and indexes if they don't exist
 def create_schema(conn: sqlite3.Connection) -> None:
-    with conn:  #uses the context manager of sqlite3.Connection
+    with conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS images (
             image_id     INTEGER PRIMARY KEY,
-            path         TEXT UNIQUE NOT NULL,    # store file path as text, must be unique and not null
+            path         TEXT UNIQUE NOT NULL,
             file_name    TEXT,
             directory    TEXT,
             file_size    INTEGER,
-            mtime        REAL,   # last file modification time (used to detect changes and avoid unnecessary reprocessing)
-            hsv_vector   BLOB,  # store feature vectors as binary data for efficient storage and retrieval
+            mtime        REAL,
+            hsv_vector   BLOB,
             embed_vector BLOB,
-            hog_vector   BLOB  )
+            hog_vector   BLOB
         );
-        CREATE INDEX IF NOT EXISTS idx_path ON images(path);   # create indexes on path and directory for faster lookups
+        CREATE INDEX IF NOT EXISTS idx_path ON images(path);
         CREATE INDEX IF NOT EXISTS idx_dir  ON images(directory);
         """)
+
 
 # generate a unique, stable 63-bit positive ID from the image path using blake2b hashing
 def generate_image_id(path: str) -> int:
