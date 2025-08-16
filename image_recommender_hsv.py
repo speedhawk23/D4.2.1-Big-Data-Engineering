@@ -5,7 +5,6 @@ import cv2
 from tqdm import tqdm
 from image_indexer import cfg, open_db, create_schema
 
-
 try:
     import faiss
     FAISS_AVAILABLE = True
@@ -13,7 +12,7 @@ except ImportError:
     FAISS_AVAILABLE = False
 
 # Configure FAISS and vector precision defaults with optional IVF parameters.
-USE_FLOAT16 = True
+USE_FLOAT16 = False 
 USE_FAISS = FAISS_AVAILABLE
 FAISS_USE_IVF = False
 FAISS_NLIST = 1024
@@ -40,23 +39,50 @@ def _imread_any(path: str):
     except Exception:
         return None
 
-# Implement HSV feature extraction with masked color histogram, normalization, and compact vector output.  
+# Robust HSV features also for grayscale/low-SAT images
+MIN_PIX_RATIO = 0.05
+LOW_S = 16     
+LOW_V = 16    
+V_BINS = 32
+
+# Implement HSV feature extraction with masked color histogram + zusätzlichem V-Histogramm.
 def compute_hsv_vector(path: str) -> Optional[np.ndarray]:
     try:
         img = _imread_any(path)
-        if img is None: return None
+        if img is None:
+            return None
+
         img = cv2.resize(img, cfg.RESIZE, interpolation=cv2.INTER_AREA)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, (0,32,32), (179,255,255))
-        hist = cv2.calcHist([hsv], [0,1], mask, cfg.BINS, [0,180,0,256])
-        hist = cv2.normalize(hist, None, alpha=1.0, norm_type=cv2.NORM_L2)
-        v = hist.flatten()
+
+        # 1) Standard mask softer
+        mask = cv2.inRange(hsv, (0, LOW_S, LOW_V), (179, 255, 255))
+        valid = np.count_nonzero(mask)
+
+        # 2) If too few valid pixels threshold loosen
+        if valid < MIN_PIX_RATIO * mask.size:
+            mask = cv2.inRange(hsv, (0, 0, LOW_V), (179, 255, 255))
+            valid = np.count_nonzero(mask)
+
+        # 3) If still not enough , without mask 
+        if valid == 0:
+            mask = None
+
+        # HS-Histogramm 
+        hs_hist = cv2.calcHist([hsv], [0, 1], mask, cfg.BINS, [0, 180, 0, 256])
+        hs_hist = cv2.normalize(hs_hist, None, alpha=1.0, norm_type=cv2.NORM_L2).flatten()
+
+        # Additionally: V-Histogram → differentiates grayscale/X-ray images
+        v_hist = cv2.calcHist([hsv], [2], mask, [V_BINS], [0, 256])
+        v_hist = cv2.normalize(v_hist, None, alpha=1.0, norm_type=cv2.NORM_L2).flatten()
+
+        v = np.concatenate([hs_hist, v_hist])
         v = v.astype(np.float16 if USE_FLOAT16 else np.float32, copy=False)
         return np.ascontiguousarray(v)
     except Exception:
         return None
 
-# Add worker function to compute HSV vector and return as DB-storable bytes (BLOB)    
+# Add worker function to compute HSV vector and return as DB-storable bytes (BLOB)
 def process_feature_worker(args: Tuple[int, str]) -> Optional[Tuple[int, bytes]]:
     image_id, path = args
     v = compute_hsv_vector(path)
@@ -105,7 +131,7 @@ def process_hsv(conn: sqlite3.Connection, limit: Optional[int] = None) -> None:
 
             # Progress bar for this page
             with tqdm(total=len(rows),
-                      desc=f"HSV [{processed_total}/{'' if limit is None else limit}]",
+                      desc=f"HSV ({limit if limit is not None else 'all'})",
                       unit="img") as pbar:
                 for res in pool.imap_unordered(process_feature_worker, rows, chunksize=400):
                     pbar.update(1)
@@ -123,8 +149,6 @@ def process_hsv(conn: sqlite3.Connection, limit: Optional[int] = None) -> None:
             processed_total += len(rows)
 
     print(f"HSV-Fertig: {success} ok, {failed} Fehler (processed_total={processed_total})")
-
-
 
 # Convert HSV vector from database BLOB to contiguous NumPy float32 array.
 def _vec_from_blob(blob: bytes) -> np.ndarray:
@@ -144,7 +168,7 @@ class HSVIndex:
         sims = self.mat @ q
         idx = np.argpartition(-sims, k-1)[:k]; idx = idx[np.argsort(-sims[idx])]
         return [(self.paths[int(i)], float(sims[int(i)])) for i in idx]
-    
+
 # Add helper to get count of indexed images and maximum image_id from the database.
 def _index_stats(conn: sqlite3.Connection) -> Tuple[int,int]:
     c = conn.execute("SELECT COUNT(*), COALESCE(MAX(image_id),0) FROM images WHERE hsv_vector IS NOT NULL").fetchone()
@@ -178,7 +202,10 @@ def _compute_query_vec(path: str) -> Optional[np.ndarray]:
     v = compute_hsv_vector(path)
     if v is None: return None
     v = v.astype(np.float32, copy=False)
-    v /= (np.linalg.norm(v) + 1e-8)
+    n = np.linalg.norm(v)
+    if not np.isfinite(n) or n < 1e-12:
+        return None
+    v /= n
     return v
 
 def load_hsv_index(db_path: str, persist: bool=False) -> HSVIndex:
@@ -188,13 +215,20 @@ def load_hsv_index(db_path: str, persist: bool=False) -> HSVIndex:
 
     paths, vecs = [], []
     cur.execute("SELECT path, hsv_vector FROM images WHERE hsv_vector IS NOT NULL")
+    HS_DIM = cfg.BINS[0]*cfg.BINS[1]
+    TARGET_DIM = HS_DIM + V_BINS
+    zeros_v = np.zeros(V_BINS, dtype=np.float32)
+
     while True:
         rows = cur.fetchmany(100_000)
         if not rows: break
         for path, blob in rows:
             if blob is None: continue
             v = _vec_from_blob(blob)
-            if v.size != (cfg.BINS[0]*cfg.BINS[1]): continue
+            if v.size == HS_DIM:
+                v = np.concatenate([v.astype(np.float32, copy=False), zeros_v])
+            elif v.size != TARGET_DIM:
+                continue
             n = np.linalg.norm(v)
             if n > 0: v = v / n
             paths.append(path); vecs.append(v)
@@ -207,8 +241,7 @@ def load_hsv_index(db_path: str, persist: bool=False) -> HSVIndex:
     idx_loaded = try_load_faiss_index(db_path, count, maxid, dim) if USE_FAISS else None
     if idx_loaded is not None:
         return HSVIndex(paths, index=idx_loaded, use_faiss=True)
-    
-    
+
     if USE_FAISS and len(paths) >= 1:
         if FAISS_USE_IVF and M.shape[0] >= 10_000:
             quant = faiss.IndexFlatIP(dim)
@@ -223,15 +256,14 @@ def load_hsv_index(db_path: str, persist: bool=False) -> HSVIndex:
         if persist:
             save_faiss_index(db_path, idx, len(paths), maxid, dim)
         return HSVIndex(paths, index=idx, use_faiss=True)
-    
 
     return HSVIndex(paths, mat=M, use_faiss=False)
+
 def find_similar(query_path: str, db_path: str, k: int=5, persist_index: bool=False):
     q = _compute_query_vec(query_path)
     if q is None: return []
     idx = load_hsv_index(db_path, persist=persist_index)
     return idx.search(q, k=k)
-
 
 if __name__ == "__main__":
     import argparse
