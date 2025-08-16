@@ -363,6 +363,16 @@ def search_faiss(query_path: str,
 # CLI 
 if __name__ == "__main__":
     import argparse, sys
+
+    # ---- Stage-Aliase: hog -> index, search -> search_linear ----
+    alias_argv = sys.argv[1:].copy()
+    for i, a in enumerate(alias_argv):
+        if a == "--stage" and i + 1 < len(alias_argv):
+            if alias_argv[i + 1] == "hog":
+                alias_argv[i + 1] = "index"
+            elif alias_argv[i + 1] == "search":
+                alias_argv[i + 1] = "search_linear"
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", choices=["index", "search_linear", "build_faiss", "search_faiss"], required=True)
     parser.add_argument("--db", default=cfg.DB_PATH)
@@ -379,7 +389,7 @@ if __name__ == "__main__":
     parser.add_argument("--faiss_nlist", type=int, default=4096)
     parser.add_argument("--faiss_train", type=int, default=200_000, help="Training sample size (reservoir)")
     parser.add_argument("--faiss_batch", type=int, default=50_000, help="Batch size for index.add()")
-    args = parser.parse_args()
+    args = parser.parse_args(alias_argv)
 
     gpu_flag = bool(args.gpu) and _cuda_available()
 
