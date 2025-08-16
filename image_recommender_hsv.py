@@ -214,24 +214,23 @@ def find_similar(query_path: str, db_path: str, k: int=5, persist_index: bool=Fa
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stage", choices=["hsv","search"], required=True)
+    parser.add_argument("--stage", choices=["index","purge"], required=True)
     parser.add_argument("--db", default=cfg.DB_PATH)
-    parser.add_argument("--query", type=str)
-    parser.add_argument("--k", type=int, default=5)
-    parser.add_argument("--faiss_ivf", action="store_true")
-    parser.add_argument("--persist_index", action="store_true", help="Save FAISS index to disk.")
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--folder", default=cfg.IMAGE_FOLDER)
+    parser.add_argument("--limit", type=int, default=None, help="Maximale Anzahl an Bildern zum Indizieren")
+    parser.add_argument("--ext", nargs="*", default=list(cfg.SCAN_EXTS))
     args = parser.parse_args()
-    if args.faiss_ivf:
-        FAISS_USE_IVF = True
-    if args.stage == "hsv":
-        conn = open_db(args.db, bulk=True)
-        create_schema(conn)
-        process_hsv(conn, limit=args.limit)
-        conn.close()
-    elif args.stage == "search":
-        if not args.query:
-            print("Please specify --query."); exit(1)
-        hits = find_similar(args.query, args.db, k=args.k, persist_index=args.persist_index)
-        for p, s in hits:
-            print(f"{s:.4f}\t{p}")
+
+    conn = open_db(args.db, bulk=True)
+    if args.stage == "index":
+        total = index_images_streaming(
+            conn,
+            args.folder,
+            args.limit,   # limit
+            set([e.lower() for e in args.ext])
+        )
+        print(f"Gescannt/indiziert: {total}")
+    elif args.stage == "purge":
+        n = purge_recyclebin_entries(conn)
+        print(f"Gelöscht: {n} Einträge mit Recycle/System im Pfad")
+    conn.close()
