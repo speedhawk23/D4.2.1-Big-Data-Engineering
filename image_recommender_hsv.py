@@ -11,7 +11,7 @@ try:
 except ImportError:
     FAISS_AVAILABLE = False
 
-# Configure FAISS and vector precision defaults with optional IVF parameters.
+# Configure FAISS and - vector precision defaults with optional IVF parameters.
 USE_FLOAT16 = True
 USE_FAISS = FAISS_AVAILABLE
 FAISS_USE_IVF = False
