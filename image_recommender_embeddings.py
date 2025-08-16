@@ -87,7 +87,23 @@ def _preprocess(path: str):
     t = torch.from_numpy(arr).permute(2,0,1).contiguous()             # Umwandeln in Torch-Tensor (Reihenfolge: Channels zuerst)
     return t  # CPU-Tensor                                            # Rückgabe als Tensor (noch auf CPU)
 
+<<<<<<< HEAD
 @torch.inference_mode()
+=======
+    arr = _imread_rgb_fast(path)
+    if arr is None: return None
+    arr = cv2.resize(arr, (224, 224), interpolation=cv2.INTER_AREA) # bild wird auf 224x224 pixel skaliert
+    arr = arr.astype(np.float32) / 255.0
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    arr = (arr - mean) / std
+    t = torch.from_numpy(arr).permute(2,0,1).contiguous()
+    if _DEVICE.type == "cuda":
+        t = t.pin_memory()
+    return t.to(device=_DEVICE, dtype=_TORCH_DTYPE, non_blocking=True)
+
+@torch.no_grad()
+>>>>>>> 0160dda (commit auf main)
 def _infer_batch(tensors: List[torch.Tensor]) -> np.ndarray:
     if not tensors:                                                   # Falls Liste leer → leeres Array zurück
         return np.empty((0,1280), np.float32)
