@@ -102,14 +102,20 @@ def process_hsv(conn: sqlite3.Connection, limit: Optional[int] = None) -> None:
                 rows = rows[:remaining]
 
             batch: List[Tuple[int, bytes]] = []
-            for res in pool.imap_unordered(process_feature_worker, rows, chunksize=400):
-                if res:
-                    batch.append(res); success += 1
-                    if len(batch) >= cfg.UPDATE_BATCH_SIZE:
-                        write_features(conn, batch)
-                        batch.clear()
-                else:
-                    failed += 1
+
+            # Progress bar for this page
+            with tqdm(total=len(rows),
+                      desc=f"HSV [{processed_total}/{'' if limit is None else limit}]",
+                      unit="img") as pbar:
+                for res in pool.imap_unordered(process_feature_worker, rows, chunksize=400):
+                    pbar.update(1)
+                    if res:
+                        batch.append(res); success += 1
+                        if len(batch) >= cfg.UPDATE_BATCH_SIZE:
+                            write_features(conn, batch)
+                            batch.clear()
+                    else:
+                        failed += 1
 
             if batch:
                 write_features(conn, batch)
@@ -117,6 +123,7 @@ def process_hsv(conn: sqlite3.Connection, limit: Optional[int] = None) -> None:
             processed_total += len(rows)
 
     print(f"HSV-Fertig: {success} ok, {failed} Fehler (processed_total={processed_total})")
+
 
 
 # Convert HSV vector from database BLOB to contiguous NumPy float32 array.
