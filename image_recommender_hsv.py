@@ -72,31 +72,52 @@ def write_features(conn: sqlite3.Connection, batch: List[Tuple[int, bytes]]) -> 
         )
 
 # Process images in pages and in parallel, show progress, and save results to the database in batches while tracking successes and failures
-def process_hsv(conn: sqlite3.Connection) -> None:
+def process_hsv(conn: sqlite3.Connection, limit: Optional[int] = None) -> None:
     page = cfg.BATCH_SIZE
     success = failed = 0
     last_id = 0
+    processed_total = 0
+
     with mp.Pool(cfg.NUM_WORKERS, initializer=_worker_init) as pool:
         while True:
+            # Limit-Stop
+            if limit is not None and processed_total >= limit:
+                break
+
             rows = conn.execute(
                 "SELECT image_id, path FROM images "
                 "WHERE hsv_vector IS NULL AND image_id > ? "
                 "ORDER BY image_id LIMIT ?",
                 (last_id, page)
             ).fetchall()
-            if not rows: break
+            if not rows:
+                break
+
             last_id = rows[-1][0]
+
+            if limit is not None:
+                remaining = max(0, limit - processed_total)
+                if remaining <= 0:
+                    break
+                rows = rows[:remaining]
+
             batch: List[Tuple[int, bytes]] = []
-            for res in tqdm(pool.imap_unordered(process_feature_worker, rows, chunksize=400),
-                            total=len(rows), desc=f"HSV (last_id={last_id})"):
+            for res in pool.imap_unordered(process_feature_worker, rows, chunksize=400):
                 if res:
                     batch.append(res); success += 1
                     if len(batch) >= cfg.UPDATE_BATCH_SIZE:
-                        write_features(conn, batch); batch.clear()
+                        write_features(conn, batch)
+                        batch.clear()
                 else:
                     failed += 1
-            if batch: write_features(conn, batch)
-    print(f"HSV-Fertig: {success} ok, {failed} Fehler")
+
+            if batch:
+                write_features(conn, batch)
+
+            processed_total += len(rows)
+
+    print(f"HSV-Fertig: {success} ok, {failed} Fehler (processed_total={processed_total})")
+
 
 # Convert HSV vector from database BLOB to contiguous NumPy float32 array.
 def _vec_from_blob(blob: bytes) -> np.ndarray:
@@ -213,18 +234,22 @@ if __name__ == "__main__":
     parser.add_argument("--query", type=str)
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--faiss_ivf", action="store_true")
-    parser.add_argument("--persist_index", action="store_true", help="Save FAISS index to disk.")
+    parser.add_argument("--persist_index", action="store_true")
+    parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
+
     if args.faiss_ivf:
         FAISS_USE_IVF = True
+
     if args.stage == "hsv":
         conn = open_db(args.db, bulk=True)
         create_schema(conn)
-        process_hsv(conn)
+        process_hsv(conn, limit=args.limit)  # limit
         conn.close()
     elif args.stage == "search":
         if not args.query:
-            print("Please specify --query."); exit(1)
+            print("Please specify --query.")
+            raise SystemExit(1)
         hits = find_similar(args.query, args.db, k=args.k, persist_index=args.persist_index)
         for p, s in hits:
             print(f"{s:.4f}\t{p}")
