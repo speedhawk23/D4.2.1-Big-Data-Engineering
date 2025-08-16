@@ -162,21 +162,14 @@ if __name__ == "__main__":
     parser.add_argument("--stage", choices=["index","purge"], required=True)
     parser.add_argument("--db", default=cfg.DB_PATH)
     parser.add_argument("--folder", default=cfg.IMAGE_FOLDER)
-    parser.add_argument("--limit", type=int, default=None, help="Maximale Anzahl an Bildern zum Indizieren")
+    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--ext", nargs="*", default=list(cfg.SCAN_EXTS))
     args = parser.parse_args()
-
     conn = open_db(args.db, bulk=True)
     if args.stage == "index":
-        total = index_images_streaming(
-            conn,
-            args.folder,
-            args.limit,   #  limit
-            set([e.lower() for e in args.ext])
-        )
+        total = index_images_streaming(conn, args.folder, args.limit, set([e.lower() for e in args.ext]))
         print(f"Gescannt/indiziert: {total}")
     elif args.stage == "purge":
         n = purge_recyclebin_entries(conn)
         print(f"Gelöscht: {n} Einträge mit Recycle/System im Pfad")
     conn.close()
-
