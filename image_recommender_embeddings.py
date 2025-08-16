@@ -13,8 +13,6 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("CV_NUM_THREADS", "1")
  
  
- 
- 
 # ------------------------------------------------
 # Backbone wird gebaut damit Klassifizierungen effizient durchgeführt werden können
 # ------------------------------------------------
@@ -44,7 +42,6 @@ def _imread_rgb_fast(path: str):
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
  
 def _preprocess(path: str):
- 
     arr = _imread_rgb_fast(path)
     if arr is None: return None
     arr = cv2.resize(arr, (224, 224), interpolation=cv2.INTER_AREA) # bild wird auf 224x224 pixel skaliert
@@ -52,17 +49,19 @@ def _preprocess(path: str):
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     arr = (arr - mean) / std
-    t = torch.from_numpy(arr).permute(2,0,1).contiguous()
+    t = torch.from_numpy(arr).permute(2,0,1).contiguous()   # CPU-Tensor
     if _DEVICE.type == "cuda":
-        t = t.pin_memory()
-    return t.to(device=_DEVICE, dtype=_TORCH_DTYPE, non_blocking=True)
+        t = t.pin_memory()  # schnellere H2D-Kopie
+    return t  # <-- NICHT auf die GPU verschieben (OOM-Fix)
  
 @torch.no_grad()
 def _infer_batch(tensors: List[torch.Tensor]) -> np.ndarray:
     if not tensors:
         return np.empty((0,1280), np.float32)
-    batch = torch.stack(tensors, 0)
-    if AMP:
+    batch = torch.stack(tensors, 0)  # noch CPU
+    if _DEVICE.type == "cuda":
+        batch = batch.to(device=_DEVICE, dtype=_TORCH_DTYPE, non_blocking=True)  # <-- HIER auf GPU (OOM-Fix)
+    if AMP and _DEVICE.type == "cuda":
         with torch.autocast(device_type=_DEVICE.type, dtype=torch.float16):
             feats = _BACKBONE(batch)
     else:
@@ -293,9 +292,9 @@ def _compute_query_vec(path: str) -> Optional[np.ndarray]:
     t = t.unsqueeze(0)
     if AMP:
         with torch.autocast(device_type=_DEVICE.type, dtype=torch.float16):
-            feat = _BACKBONE(t)
+            feat = _BACKBONE(t.to(device=_DEVICE, dtype=_TORCH_DTYPE, non_blocking=True) if _DEVICE.type == "cuda" else t)
     else:
-        feat = _BACKBONE(t)
+        feat = _BACKBONE(t.to(device=_DEVICE, dtype=_TORCH_DTYPE, non_blocking=True) if _DEVICE.type == "cuda" else t)
     v = feat.float().squeeze(0).cpu().numpy().astype(np.float32)
     v /= (np.linalg.norm(v)+1e-8)
     return v
