@@ -46,7 +46,7 @@ def _preprocess(path: str):
 
     arr = _imread_rgb_fast(path)
     if arr is None: return None
-    arr = cv2.resize(arr, (224, 224), interpolation=cv2.INTER_AREA)
+    arr = cv2.resize(arr, (224, 224), interpolation=cv2.INTER_AREA) # bild wird auf 224x224 pixel skaliert
     arr = arr.astype(np.float32) / 255.0
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
