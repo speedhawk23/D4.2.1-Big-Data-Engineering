@@ -71,40 +71,55 @@ def write_features(conn: sqlite3.Connection, batch: List[Tuple[int, bytes]]) -> 
         )
 
 # Process images in pages and in parallel, show progress, and save results to the database in batches while tracking successes and failures
-def process_hsv(conn: sqlite3.Connection, limit: Optional[int]=None) -> None:
+def process_hsv(conn: sqlite3.Connection, limit: Optional[int] = None) -> None:
     page = cfg.BATCH_SIZE
     success = failed = 0
     last_id = 0
     processed_total = 0
+
     with mp.Pool(cfg.NUM_WORKERS, initializer=_worker_init) as pool:
         while True:
             if limit is not None and processed_total >= limit:
                 break
+
             rows = conn.execute(
                 "SELECT image_id, path FROM images "
                 "WHERE hsv_vector IS NULL AND image_id > ? "
                 "ORDER BY image_id LIMIT ?",
                 (last_id, page)
             ).fetchall()
-            if not rows: break
+            if not rows:
+                break
+
             last_id = rows[-1][0]
+
             if limit is not None:
                 remaining = max(0, limit - processed_total)
-                if remaining == 0:
+                if remaining <= 0:
                     break
                 rows = rows[:remaining]
+
             batch: List[Tuple[int, bytes]] = []
-            for res in tqdm(pool.imap_unordered(process_feature_worker, rows, chunksize=400),
-                            total=len(rows), desc=f"HSV (last_id={last_id})"):
-                if res:
-                    batch.append(res); success += 1
-                    if len(batch) >= cfg.UPDATE_BATCH_SIZE:
-                        write_features(conn, batch); batch.clear()
-                else:
-                    failed += 1
-            if batch: write_features(conn, batch)
+
+            with tqdm(total=len(rows),
+                      desc=f"HSV [{processed_total}/{'' if limit is None else limit}]",
+                      unit="img") as pbar:
+                for res in pool.imap_unordered(process_feature_worker, rows, chunksize=400):
+                    pbar.update(1)
+                    if res:
+                        batch.append(res); success += 1
+                        if len(batch) >= cfg.UPDATE_BATCH_SIZE:
+                            write_features(conn, batch)
+                            batch.clear()
+                    else:
+                        failed += 1
+
+            if batch:
+                write_features(conn, batch)
+
             processed_total += len(rows)
-    print(f"HSV-Fertig: {success} ok, {failed} Fehler")
+
+    print(f"HSV-Fertig: {success} ok, {failed} Fehler (processed_total={processed_total})")
 
 # Convert HSV vector from database BLOB to contiguous NumPy float32 array.
 def _vec_from_blob(blob: bytes) -> np.ndarray:
