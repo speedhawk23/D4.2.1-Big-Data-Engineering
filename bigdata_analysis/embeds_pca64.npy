@@ -1,0 +1,13 @@
+python - <<'PY'
+import os, numpy as np, math
+path = "embeds_pca64.npy"   # deine vorhandene Datei (Memmap)
+D = 64                       # Ziel-Dimension
+sz = os.path.getsize(path)
+# 4 Bytes pro float32 * D -> Anzahl Zeilen N
+N = sz // (4*D)
+assert sz == N*4*D, f"Dateigröße passt nicht zu (N,{D}). Bytes={sz}, N={N}"
+
+X = np.memmap(path, dtype="float32", mode="r", shape=(N, D))
+np.save("embeds_pca64_fixed.npy", np.asarray(X))
+print(f"Konvertiert: N={N}, D={D} -> embeds_pca64_fixed.npy")
+PY
