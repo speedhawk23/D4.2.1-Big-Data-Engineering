@@ -149,7 +149,7 @@ def purge_recyclebin_entries(conn: sqlite3.Connection) -> int:
         cur = conn.execute(f"DELETE FROM images WHERE {where}", [p.lower() for p in patterns])
         return cur.rowcount
 
-# CLI
+#CLI
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
