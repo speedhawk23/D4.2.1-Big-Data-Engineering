@@ -1,0 +1,10 @@
+opencv-python
+numpy
+torch
+faiss-cpu
+sqlite-utils
+tqdm
+pytest
+pillow
+umap-learn
+scikit-learn
