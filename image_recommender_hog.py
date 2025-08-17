@@ -32,7 +32,7 @@ _hog_cpu = cv2.HOGDescriptor(
     HOG_WIN_SIZE, HOG_BLOCK_SIZE, HOG_BLOCK_STRIDE, HOG_CELL_SIZE, HOG_NBINS
 )
 
-# CUDA preproc (only grayscale+resize on GPU; HOG stays on CPU) 
+# CUDA preproc (only grayscale+resize on GPU; HOG stays on CPU)
 def _cuda_available() -> bool:
     try:
         return hasattr(cv2, "cuda") and cv2.cuda.getCudaEnabledDeviceCount() > 0
@@ -40,7 +40,7 @@ def _cuda_available() -> bool:
         return False  # NOTE: guard against OpenCV builds without CUDA
 
 def _preprocess_gray_gpu(img_bgr: np.ndarray) -> Optional[np.ndarray]:
-     #evaluate transfer overhead vs CPU for small 64x64 targets
+    # evaluate transfer overhead vs CPU for small 64x64 targets
     try:
         gpumat = cv2.cuda_GpuMat()
         gpumat.upload(img_bgr)
@@ -63,7 +63,7 @@ def _worker_init(gpu_flag: bool):
     # Runs once per worker; avoid per-task overhead here
     global _GPU_FLAG
     _GPU_FLAG = gpu_flag and _cuda_available()
-    try: cv2.setNumThreads(0)  
+    try: cv2.setNumThreads(0)
     except: pass
     try:
         np.random.seed((os.getpid() * int(time.time())) % 1234567)
@@ -174,7 +174,7 @@ def index_images_hog(conn: sqlite3.Connection, folder: str,
             total_indexed += len(batch)
     return total_indexed
 
-# Similarity 
+# Similarity
 def hog_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
     # Unit-norm vectors  , dot product equals cosine similarity (fast path)
     return float(np.dot(vec1, vec2))
